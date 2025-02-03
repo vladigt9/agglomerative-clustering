@@ -1,0 +1,8 @@
+# Ignore compiled files
+*.o
+*.out
+*.exe
+*.log
+.vscode/
+main
+*.txt
