@@ -54,7 +54,7 @@ This project is an important step in building a strong understanding of hierarch
 - Add Ward linkage.
 - Optimize memory allocation of variables
 
-#Dependencies
+## Dependencies
 - C++ 20
 - G++ 12.3.0
 - OpenMP 201511
