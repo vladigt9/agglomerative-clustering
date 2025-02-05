@@ -1,18 +1,32 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <cblas.h>
 #include <omp.h>
 #include <algorithm>
+#include <random>
+#include <chrono>
+
+// #include <cblas.h>
 
 template <typename T>
 class Clustering
 {
 private:
+    // m_X - stores the input matrix
+    // m_linkageType - linkage type from "single", "average", "complete"
+    // m_metric - distance metric from "euclidean", "manhattan", "cosine"
+    // m_clusters - stores the cluster number of each input point
+    // m_n_clusters - number of unique clusters which m_cluster stores
+    // m_preemptiveStop - if True stops clustering once num of unique clusters = m_n_clusters
+
     std::vector<std::vector<T>> m_X{};
     std::string m_linkageType{"single"};
     std::string m_metric{"euclidean"};
+    std::vector<int> m_clusters {};
+    int m_n_clusters {1};
+    bool m_preemptiveStop {false};
 
+    // Defines a row for the final linkage matrix
     struct LinkageRow {
         int cluster1 {0};
         int cluster2 {0};
@@ -22,6 +36,8 @@ private:
 
     double calculateDistance(const std::vector<T> &a, const std::vector<T> &b)
     {
+        // Calculates the distance between two points.
+
         if (m_metric == "euclidean")
         {
             // Initialize variable sum of the squared distances SSD
@@ -39,7 +55,7 @@ private:
 
             return distance;
         }
-        else if (m_metric == "mahattan")
+        else if (m_metric == "manhattan")
         {
             // Initialize variable for final distance
             double distance = 0;
@@ -84,38 +100,90 @@ private:
     double averageLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
                      const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
     {
-        // Calculate the centroid of clusterA
-        std::vector<double> centroidA(clusterA[0].get().size(), 0.0);  // Assuming all points have the same dimensions
+        // Averages the position of all the points of two clusters
+        // after which returns the distance between them
 
-        for (const auto& pointA : clusterA) 
+        // Calculate the centroid of clusterA
+        std::vector<double> centroidA(clusterA[0].get().size(), 0.0);
+
+        // Split threads
+        // This can be done without localcentroids and using atomic,
+        // however must be tested before changing
+        #pragma omp parallel
         {
-            for (size_t i = 0; i < pointA.get().size(); ++i) 
+            // Local copy of centroidA for each thread
+            std::vector<double> localCentroid(clusterA[0].get().size(), 0.0);
+
+            // Parallize the number of points rather than dimension as usaully
+            // for matrix mxn m >> n
+            #pragma omp for
+            for (std::size_t i = 0; i < clusterA.size(); ++i)
             {
-                centroidA[i] += pointA.get()[i];
+                for (std::size_t k = 0; k < clusterA[i].get().size(); ++k)
+                {
+                    localCentroid[k] += clusterA[i].get()[k];
+                }
+            }
+
+            // Combine results from each thread into the global centroid
+            #pragma omp critical
+            {
+                for (std::size_t k = 0; k < centroidA.size(); ++k)
+                {
+                    centroidA[k] += localCentroid[k];
+                }
             }
         }
 
-        for (double& val : centroidA) 
+        // Get cluster size before the loop to offer small increase in speed
+        int sizeClusterA {static_cast<int>(clusterA.size())};
+
+        // Average all the values
+        #pragma omp parallel for
+        for (std::size_t i = 0; i < centroidA.size(); ++i) 
         {
-            val /= clusterA.size();  // Average the values to get the centroid
+            centroidA[i] /= sizeClusterA;
         }
 
         // Calculate the centroid of clusterB
         std::vector<double> centroidB(clusterB[0].get().size(), 0.0);
 
-        for (const auto& pointB : clusterB) 
+
+        // Expand the threads
+        #pragma omp parallel
         {
-            for (size_t i = 0; i < pointB.get().size(); ++i) 
+            // Local copy of centroidB for each thread
+            std::vector<double> localCentroid(clusterB[0].get().size(), 0.0);
+
+            #pragma omp for
+            for (std::size_t i = 0; i < clusterB.size(); ++i)
             {
-                centroidB[i] += pointB.get()[i];
+                for (std::size_t k = 0; k < clusterB[i].get().size(); ++k)
+                {
+                    localCentroid[k] += clusterB[i].get()[k];
+                }
+            }
+
+            // Combine results
+            #pragma omp critical
+            {
+                for (std::size_t k = 0; k < centroidB.size(); ++k)
+                {
+                    centroidB[k] += localCentroid[k];
+                }
             }
         }
 
-        for (double& val : centroidB) 
+        int sizeClusterB {static_cast<int>(clusterB.size())};
+
+        // Average all the distances
+        #pragma omp for
+        for (std::size_t i = 0; i < centroidB.size(); ++i) 
         {
-            val /= clusterB.size();  // Average the values to get the centroid
+            centroidB[i] /= clusterB.size();
         }
 
+        // Find distances between the cntroids of the two clusters
         double distance = calculateDistance(centroidA, centroidB);
 
         return distance;
@@ -124,19 +192,16 @@ private:
     double completeLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
                      const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
     {
-        double maxDistance = std::numeric_limits<double>::min(); // Initialize with a small value
+        // Initialize with a small value
+        double maxDistance = std::numeric_limits<double>::min();
 
-        // Iterate over each point in clusterA
-        for (const auto& pointA : clusterA)
+        // Parallelize the for loop and use reduction to find the maxDsitance
+        #pragma omp parallel for reduction(max : maxDistance)
+        for (std::size_t i = 0; i < clusterA.size(); ++i)
         {
-            // Iterate over each point in clusterB
-            for (const auto& pointB : clusterB)
+            for (std::size_t j = 0; j < clusterB.size(); ++j)
             {
-                // Calculate the distance between pointA and pointB
-                // double distance = calculateDistance(pointA, pointB);
-                double distance = calculateDistance(pointA.get(), pointB.get());
-
-                // Update minDistance if a smaller distance is found
+                double distance = calculateDistance(clusterA[i].get(), clusterB[j].get());
                 if (distance > maxDistance)
                 {
                     maxDistance = distance;
@@ -150,19 +215,17 @@ private:
     double singleLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
                      const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
     {
-        double minDistance = std::numeric_limits<double>::max(); // Initialize with a large value
+        // Initialize minDistance with bbig placeholder value
+        double minDistance = std::numeric_limits<double>::max();
 
-        // Iterate over each point in clusterA
-        for (const auto& pointA : clusterA)
+        // Parallelize the loop using reduciton min so omp does the atomicity
+        #pragma omp parallel for reduction(min : minDistance)
+        for (std::size_t i = 0; i < clusterA.size(); ++i)
         {
-            // Iterate over each point in clusterB
-            for (const auto& pointB : clusterB)
+            for (std::size_t j = 0; j < clusterB.size(); ++j)
             {
-                // Calculate the distance between pointA and pointB
-                // double distance = calculateDistance(pointA, pointB);
-                double distance = calculateDistance(pointA.get(), pointB.get());
+                double distance = calculateDistance(clusterA[i].get(), clusterB[j].get());
 
-                // Update minDistance if a smaller distance is found
                 if (distance < minDistance)
                 {
                     minDistance = distance;
@@ -176,6 +239,8 @@ private:
     double Linkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
                      const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
     {
+        // Invokes one of the 3 used linkage methods and returns the distance
+        // between the two clusters inputed
         if (m_linkageType == "single")
         {
             return singleLinkage(clusterA, clusterB);
@@ -195,31 +260,40 @@ private:
 
     std::pair<std::vector<double>, std::vector<std::pair<int, int>>> 
     updateCondensedArrayAndMap(const std::vector<double>& condensedArray, 
-                                    const std::vector<std::pair<int, int>>& arrayMap, 
-                                    const std::vector<int>& remainingIndices, 
-                                    int cluster1, int cluster2) 
-        {
-        int newCluster = remainingIndices.back();  // New cluster is at the back of remainingIndices
-        std::vector<double> newCondensedArray;
-        std::vector<std::pair<int, int>> newArrayMap;
+                               const std::vector<std::pair<int, int>>& arrayMap, 
+                               const std::vector<int>& remainingIndices, 
+                               int cluster1, 
+                               int cluster2) 
+    {
+        // Updates the condesed array and map by removing all the instances,
+        // of the points/clusters which construct the new one then shifts the 
+        // remaining values to the left
+        
+        // Get the new cluster from the back of remainingIndices
+        const int newCluster = remainingIndices.back();
+        const int sizeIndices = remainingIndices.size();
 
-        // Reserve space based on the expected new size
-        newCondensedArray.reserve((remainingIndices.size() * (remainingIndices.size() - 1)) / 2);
-        newArrayMap.reserve((remainingIndices.size() * (remainingIndices.size() - 1)) / 2);
+        // Initialize the new array and map in which all the distances and indices will be stored
+        std::vector<double> newCondensedArray {};
+        std::vector<std::pair<int, int>> newArrayMap {};
 
-        // Iterate through `arrayMap` and keep only the valid indices
+        // Reserve space based on size
+        newCondensedArray.reserve((sizeIndices * (sizeIndices - 1)) / 2);
+        newArrayMap.reserve((sizeIndices * (sizeIndices - 1)) / 2);
+
+        // Iterate through arrayMap and keep only the valid indices
         for (size_t i = 0; i < arrayMap.size(); ++i) 
         {
-            const auto& pair = arrayMap[i];
+            const std::pair<int, int>& pair = arrayMap[i];
             
             // Skip pairs involving merged clusters
             if (pair.first == cluster1 || pair.first == cluster2 || 
                 pair.second == cluster1 || pair.second == cluster2)
                 continue;
 
-            // Keep the distance that corresponds to this pair
+            // Keep the distance and indices that corresponds to this pair
             newArrayMap.push_back(pair);
-            newCondensedArray.push_back(condensedArray[i]);  // Preserve same indexing
+            newCondensedArray.push_back(condensedArray[i]);
         }
 
         // Append new distances involving the newly formed cluster
@@ -237,6 +311,9 @@ private:
     std::vector<int> getRemainingIndices(const std::vector<int>& id_map, 
                                      int cluster1, int cluster2) 
     {
+        // Returns a vector with the unique remaining indices in ascending order.
+
+        // Initialize the vector and reserve enough space
         std::vector<int> remainingIndices;
 
         // Add unique elements from id_map to remainingIndices, excluding cluster1 and cluster2
@@ -257,10 +334,13 @@ private:
 
     LinkageRow findBestCluster(std::vector<double>& condensedArray, std::vector<std::pair<int, int>>& condensedArrayMap)
     {
-        double minDistance = std::numeric_limits<double>::max();
-        int minIndex = -1;
+        // Finds the min distance in an array and its index
+        // Returns a LinkageRow with cluster indices, the distance and dummy variable for num clusters
 
-        // Find the index of the minimum distance
+        double minDistance = std::numeric_limits<double>::max();
+        std::size_t minIndex = 0;
+
+        // Find the index of the minimum distance and the distance
         for (std::size_t i = 0; i < condensedArray.size(); ++i) {
             if (condensedArray[i] < minDistance) {
                 minDistance = condensedArray[i];
@@ -268,53 +348,68 @@ private:
             }
         }
 
-        return LinkageRow {condensedArrayMap[minIndex].first, condensedArrayMap[minIndex].second, minDistance, 1};
+        return LinkageRow {condensedArrayMap[minIndex].first, condensedArrayMap[minIndex].second, minDistance, 0};
     }
 
-    std::vector<LinkageRow> clustering()
+    std::vector<LinkageRow> cluster()
     {
+        // Perform the main clustering
+        // First calculates distances for the intial matrix
+        // Then starts the loop:
+        //      * Get best cluster
+        //      * Update condensed array and map
+        //      * Update Distances
+        // Returns the linkage matrix
+
         // Get initial size of the arr
-        auto n {std::size(m_X)};
+        const std::size_t n {std::size(m_X)};
 
-        // Initialize the linkage matrix
-        std::vector<LinkageRow> Z (n-1);
+        // Initialize the linkage matrix and resize based on return number of clusters
+        std::vector<LinkageRow> Z {};
+        if (m_preemptiveStop && m_n_clusters > 0)
+        {
+            Z.resize(n - m_n_clusters, LinkageRow());
+        }
+        else
+        {
+            Z.resize(n - 1, LinkageRow());
+        }
 
-        // Initialize the condensed distance array in memory.
+        // Initialize the condensed distance array in memory and its map
         int condensedSize = n * (n - 1) / 2;
-        std::vector<double> condensedArray(condensedSize, std::numeric_limits<double>::max());
+        std::vector<double> condensedArray(condensedSize);
+        std::vector<std::pair<int, int>> condensedArrayMap (condensedSize);
         
         // Initialize map used to deduce intial cluster from index and current cluster from value
         std::vector<int> id_map (n);
 
-        // Initialize map used to deduce indices of clusters
-        std::vector<std::pair<int, int>> condensedArrayMap {};
-        // condensedArrayMap.reserve(n * (n - 1) / 2);
-
         // Get intial distance condensed array
-        for (int i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < n; ++i)
         {
             id_map[i] = static_cast<int>(i);
 
+            // Break on n-1 as there the last point has no more distances to calculate
             if (i == (n-1)) break;
 
             for (int j = i + 1; j < n; ++j)
             {
-                condensedArrayMap.push_back(std::make_pair(i, j));
                 double distance = calculateDistance(m_X[i], m_X[j]);
                 int index = i * n - (i * (i + 1)) / 2 + (j - i - 1);
                 condensedArray[index] = distance;
+                condensedArrayMap[index] = std::make_pair(i, j);
             }
         }
 
         for (std::size_t i = 0; i < (n-1); ++i)
         {
-            // Find first best cluster
+            // Find best cluster
             LinkageRow cluster {findBestCluster(condensedArray, condensedArrayMap)};
 
             // Variable to save the size of the cluster
-            int size {};
+            int size {0};
 
-            // Update ID_map
+            // Update id_map and get cluster size
+            #pragma omp parallel for reduction(+:size)
             for (std::size_t k = 0; k < n; ++k)
             {
                 if (id_map[k] == cluster.cluster1 || id_map[k] == cluster.cluster2)
@@ -328,12 +423,23 @@ private:
             cluster.size = size;
             Z[i] = cluster;
 
+            // update the clusters array with the id_map when specific point is reached
+            if (static_cast<int>(i) == (n-1-m_n_clusters))
+            {
+                m_clusters = id_map;
+            }
+
+            // Break loop when Z has n-1 rows as no more clusters are possible
+            // Or break loop when desired number of cluster is reached and preemptive stop is on
+            if (i == (n-2) || (static_cast<int>(i) == (n-1-m_n_clusters) && m_preemptiveStop))
+                break;
+
             // Get remaining indeces of clusters
             std::vector<int> remainingIndices {getRemainingIndices(id_map, cluster.cluster1, cluster.cluster2)};
 
-            // Get 
+            // Get the number of valid distances left after the merging
             int validClusters = remainingIndices.size() - 2;
-            int newSize = (validClusters * (validClusters - 1)) / 2 + validClusters;
+            int numberValidDistances = (validClusters * (validClusters - 1)) / 2 + validClusters;
 
             // Update the condensed array and map
             std::pair<std::vector<double>, std::vector<std::pair<int, int>>> updateCondensed 
@@ -348,9 +454,9 @@ private:
 
             for (std::size_t k = 0; k < n; ++k)
             {
-                if (id_map[k] == n+i)
+                if (id_map[k] == n + i)
                 {
-                    cluster1.push_back(m_X[k]);
+                    cluster1.push_back(std::ref(m_X[k]));
                 }
             }
 
@@ -368,8 +474,11 @@ private:
                     }
                 }
 
-                condensedArray[newSize+k] = Linkage(cluster1, cluster2);
+                condensedArray[numberValidDistances+k] = Linkage(cluster1, cluster2);
             }
+            
+            // Clear memory
+            cluster1.clear();
 
         }
 
@@ -377,15 +486,19 @@ private:
     }
 
 public:
-    Clustering(std::vector<std::vector<T>> X, std::string_view linkage_type, std::string_view metric)
-        : m_X{X}, m_linkageType{linkage_type}, m_metric{metric}
+    Clustering(std::vector<std::vector<T>> X, std::string_view linkage_type, std::string_view metric, int n_clusters, bool preemptiveStop)
+        : m_X{X}, m_linkageType{linkage_type}, m_metric{metric}, m_n_clusters{n_clusters}, m_preemptiveStop{preemptiveStop}
     {
     }
 
     void fit()
     {
-        std::vector<LinkageRow> linkageMap {clustering()};
+        // Will return a std::vector<double> Linkage matrix
+        // Currently left as void for faster debugging and less code
 
+        std::vector<LinkageRow> linkageMap {cluster()};
+
+        // Print for debugging
         for (const auto& row : linkageMap) {
             std::cout << "Cluster1: " << row.cluster1
                     << ", Cluster2: " << row.cluster2
@@ -395,20 +508,42 @@ public:
         }
 
     }
+
+    std::vector<int> clusters()
+    {
+        // Returns a vector with the the cluster number for each point from the input matrix
+
+        // Print for debugging
+        for (int i : m_clusters)
+        {
+            std::cout << i << ", ";
+        }
+        std::cout << '\n';
+
+        return m_clusters;
+    }
 };
+    
 
 int main()
 {
-    std::vector<std::vector<double>> X{
-        {1, 1},
-        {1, 2},
-        {5, 5},
-        {5, 6},
-        {15, 15}};
+    // Vector used to debugging and checking results with Scikit-learn implementation
+    std::vector<std::vector<double>> X {
+        {2, 5}, {33, 64}, {464, 7454}, {545, 328}, {6, 9546}, {7456, 1210}, {881, 12341}, {899, 16542}, 
+        {12180, 1853}, {121, 1844}, {65412, 1325}, {137865, 13216}, {1497, 1752}, {1546, 185}, {16546, 198}, 
+        {5641, 27820}, {4564, 213}, {876, 45}, {654, 6464}, {21, 24}
+    };
 
-    Clustering<double> cluster {X, "average", "euclidean"};
+    Clustering<double> cluster {X, "single", "euclidean", 5, false};
 
+    auto start = std::chrono::high_resolution_clock::now();
     cluster.fit();
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Clustering time: " << duration.count() << " milliseconds" << std::endl;
+    
+    std::vector<int> clusters {cluster.clusters()};
 
     return 0;
 }
