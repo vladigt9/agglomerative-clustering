@@ -42,6 +42,10 @@ The project leverages **C++** for implementing the clustering algorithm and **Op
 
 - **Step 6:** Repeat until **n-1** clusters have been found.
 
+## Matrix Class
+In latest update a Matrix class was added, which flattens a matrix from nested vectors (``std::vector<std::vector<T>>``) to a 1D vector (``std::vector<T>``). It also includes basic matrix operations such as addition, substraction and matrix-matrix multiplication. All of them where implemented using the BLAS library.
+
+
 ## Conclusion
 
 This project is an important step in building a strong understanding of hierarchical clustering and parallelization. It is part of a larger effort to learn **C++** and **OpenMP**, with the aim of applying these techniques in more complex machine learning tasks in the future. Although not the most optimized solution, this implementation serves as a useful foundation for further experimentation and optimization in clustering algorithms.
