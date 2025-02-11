@@ -104,90 +104,38 @@ private:
     double averageLinkage(Matrix<double>& clusterA,
                      Matrix<double>& clusterB)
     {
-        // Averages the position of all the points of two clusters
-        // after which returns the distance between them
+        // Averages the distances of all points between 2 cluster
+        // after which returns the distance
 
         int mA {clusterA.getRows()};
         int mB {clusterB.getRows()};
-        int n {m_size.second};
 
-        // Calculate the centroid of clusterA
-        std::vector<double> centroidA(n, 0.0);
+        double distance {0};
 
-        // Split threads
-        // This can be done without localcentroids and using atomic,
-        // however must be tested before changing
-        #pragma omp parallel
+        #pragma omp parallel for reduction(+:distance)
+        for (int i = 0; i < mA; ++i)
         {
-            // Local copy of centroidA for each thread
-            std::vector<double> localCentroid(n, 0.0);
-
-            // Parallize the number of points rather than dimension as usaully
-            // for matrix mxn m >> n
-            #pragma omp for
-            for (int i = 0; i < mA; ++i)
+            for (int k = 0; k < mB; ++k)
             {
-                for (int k = 0; k < n; ++k)
-                {
-                    localCentroid[static_cast<std::size_t>(k)] += clusterA[i][k];
-                }
-            }
-
-            // Combine results from each thread into the global centroid
-            #pragma omp critical
-            {
-                for (std::size_t k = 0; k < centroidA.size(); ++k)
-                {
-                    centroidA[k] += localCentroid[k];
-                }
+                distance += calculateDistance(clusterA.vector(i), clusterB.vector(k));
             }
         }
 
-        // Average all the values
-        #pragma omp parallel for
-        for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i) 
+        if (mA < 2 && mB <2)
         {
-            centroidA[i] /= mA;
         }
-
-        // Calculate the centroid of clusterB
-        std::vector<double> centroidB(n, 0.0);
-
-
-        // Expand the threads
-        #pragma omp parallel
+        else if (mA < 2)
         {
-            // Local copy of centroidB for each thread
-            std::vector<double> localCentroid(n, 0.0);
-
-            #pragma omp for
-            for (int i = 0; i < mB; ++i)
-            {
-                for (int k = 0; k < n; ++k)
-                {
-                    localCentroid[static_cast<std::size_t>(k)] += clusterB[i][k];
-                }
-            }
-
-            // Combine results
-            #pragma omp critical
-            {
-                for (std::size_t k = 0; k < static_cast<std::size_t>(n); ++k)
-                {
-                    centroidB[k] += localCentroid[k];
-                }
-            }
+            distance /= mB;
         }
-
-        // Average all the distances
-        #pragma omp parallel for
-        for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i)
+        else if (mB < 2)
         {
-            centroidB[i] /= mB;
+            distance /= mA;
         }
-
-        // Find distances between the cntroids of the two clusters
-        double distance = calculateDistance(centroidA, centroidB);
+        else
+        {
+            distance /= (mA+mB);
+        }
 
         return distance;
     }
