@@ -15,13 +15,14 @@ private:
     int m_n {1};
     int m_size {1};
 
-    class RowProxy
+public:
+    class Row
     {
     private:
         T* row_data;
         int cols;
     public:
-        RowProxy(T* data, int cols) : row_data(data), cols(cols) {}
+        Row(T* data, int cols) : row_data(data), cols(cols) {}
 
         T& operator[](int col)
         {
@@ -38,7 +39,6 @@ private:
         }
     };
 
-public:
     // Constructor to flatten the 2D vector
     Matrix(const std::vector<std::vector<T>>& X, int m, int n)
         : m_m{m}, m_n{n}, m_size{m*n} 
@@ -48,12 +48,21 @@ public:
             m_X.insert(m_X.end(), row.begin(), row.end());
     }
 
-    RowProxy operator[](int row)
+    Row operator[](int row)
     {
         if (row < 0 || row >= m_m)
             throw std::out_of_range("Row index out of bounds");
-        return RowProxy(&m_X[row * m_n], m_n);
+        return Row(&m_X[row * m_n], m_n);
     }
+
+    std::vector<T> vector(int row) const
+    {
+        if (row < 0 || row >= m_m)
+            throw std::out_of_range("Row index out of bounds");
+
+        return std::vector<T>(m_X.begin() + row * m_n, m_X.begin() + (row + 1) * m_n);
+    }
+
 
     std::pair<int, int> getShape()
     {
@@ -102,6 +111,17 @@ public:
 
         m_X.shrink_to_fit();
     }
+
+    void push_row(const std::vector<T>& new_row)
+    {
+        if (new_row.size() != m_n)
+            throw std::invalid_argument("New row must have the same number of columns as the matrix");
+
+        m_X.insert(m_X.end(), new_row.begin(), new_row.end()); // Append row elements
+        
+        ++m_m;  // Increase row count
+    }
+
 };
 
 #endif

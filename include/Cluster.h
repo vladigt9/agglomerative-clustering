@@ -9,6 +9,8 @@
 #include <limits>
 #include <omp.h>
 
+#include <Matrix.h>
+
 template <typename T>
 class Cluster
 {
@@ -20,7 +22,8 @@ private:
     // m_n_clusters - number of unique clusters which m_cluster stores
     // m_preemptiveStop - if True stops clustering once num of unique clusters = m_n_clusters
 
-    std::vector<std::vector<T>> m_X{};
+    Matrix<T> m_X {};
+    // std::vector<std::vector<T>> m_X{}; ???
     std::string m_linkageType{"single"};
     std::string m_metric{"euclidean"};
     std::vector<int> m_clusters {};
@@ -35,7 +38,7 @@ private:
         int size {0};
     };
 
-    double calculateDistance(const std::vector<T> &a, const std::vector<T> &b)
+    double calculateDistance(std::vector<double> a, std::vector<double> b)
     {
         // Calculates the distance between two points.
 
@@ -46,7 +49,7 @@ private:
 
             // Use openMP to parallelize the loop
             #pragma omp parallel for reduction(+ : sum)
-            for (size_t i = 0; i < a.size(); ++i)
+            for (size_t i = 0; i < m_X.getRows(); ++i)
             {
                 sum += (a[i] - b[i]) * (a[i] - b[i]);
             }
@@ -63,7 +66,7 @@ private:
 
             // Use openMP to parallelize the loop
             #pragma omp parallel for reduction(+ : distance)
-            for (size_t i = 0; i < a.size(); i++)
+            for (size_t i = 0; i < m_X.getRows(); i++)
             {
                 distance += std::abs(a[i] - b[i]);
             }
@@ -78,7 +81,7 @@ private:
 
             // Use openMP to parallelize the loop
             #pragma omp parallel for reduction(+ : dotProduct) reduction(+ : normA) reduction(+ : normB)
-            for (size_t i = 0; i < a.size(); i++)
+            for (size_t i = 0; i < m_X.getRows(); i++)
             {
                 dotProduct += a[i] * b[i];
                 normA += a[i] * a[i];
@@ -98,14 +101,18 @@ private:
         return 0.0;
     }
 
-    double averageLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
-                     const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
+    double averageLinkage(Matrix<double>& clusterA,
+                     Matrix<double>& clusterB)
     {
         // Averages the position of all the points of two clusters
         // after which returns the distance between them
 
+        int mA {clusterA.getRows()};
+        int mB {clusterB.getRows()};
+        int n {clusterA.getColumns()};
+
         // Calculate the centroid of clusterA
-        std::vector<double> centroidA(clusterA[0].get().size(), 0.0);
+        std::vector<double> centroidA(n, 0.0);
 
         // Split threads
         // This can be done without localcentroids and using atomic,
@@ -113,16 +120,16 @@ private:
         #pragma omp parallel
         {
             // Local copy of centroidA for each thread
-            std::vector<double> localCentroid(clusterA[0].get().size(), 0.0);
+            std::vector<double> localCentroid(n, 0.0);
 
             // Parallize the number of points rather than dimension as usaully
             // for matrix mxn m >> n
             #pragma omp for
-            for (std::size_t i = 0; i < clusterA.size(); ++i)
+            for (std::size_t i = 0; i < mA; ++i)
             {
-                for (std::size_t k = 0; k < clusterA[i].get().size(); ++k)
+                for (std::size_t k = 0; k < n; ++k)
                 {
-                    localCentroid[k] += clusterA[i].get()[k];
+                    localCentroid[k] += clusterA[i][k];
                 }
             }
 
@@ -137,7 +144,7 @@ private:
         }
 
         // Get cluster size before the loop to offer small increase in speed
-        int sizeClusterA {static_cast<int>(clusterA.size())};
+        int sizeClusterA {static_cast<int>(mA)};
 
         // Average all the values
         #pragma omp parallel for
@@ -147,21 +154,21 @@ private:
         }
 
         // Calculate the centroid of clusterB
-        std::vector<double> centroidB(clusterB[0].get().size(), 0.0);
+        std::vector<double> centroidB(n, 0.0);
 
 
         // Expand the threads
         #pragma omp parallel
         {
             // Local copy of centroidB for each thread
-            std::vector<double> localCentroid(clusterB[0].get().size(), 0.0);
+            std::vector<double> localCentroid(n, 0.0);
 
             #pragma omp for
-            for (std::size_t i = 0; i < clusterB.size(); ++i)
+            for (std::size_t i = 0; i < mB; ++i)
             {
-                for (std::size_t k = 0; k < clusterB[i].get().size(); ++k)
+                for (std::size_t k = 0; k < n; ++k)
                 {
-                    localCentroid[k] += clusterB[i].get()[k];
+                    localCentroid[k] += clusterB[i][k];
                 }
             }
 
@@ -175,13 +182,13 @@ private:
             }
         }
 
-        int sizeClusterB {static_cast<int>(clusterB.size())};
+        int sizeClusterB {static_cast<int>(mB)};
 
         // Average all the distances
         #pragma omp for
         for (std::size_t i = 0; i < centroidB.size(); ++i) 
         {
-            centroidB[i] /= clusterB.size();
+            centroidB[i] /= mB;
         }
 
         // Find distances between the cntroids of the two clusters
@@ -190,19 +197,23 @@ private:
         return distance;
     }
 
-    double completeLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
-                     const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
+    double completeLinkage(Matrix<double>& clusterA,
+                     Matrix<double>& clusterB)
     {
+        int mA {clusterA.getRows()};
+        int mB {clusterB.getRows()};
+        int n {clusterA.getColumns()};
+
         // Initialize with a small value
         double maxDistance = std::numeric_limits<double>::min();
 
         // Parallelize the for loop and use reduction to find the maxDsitance
         #pragma omp parallel for reduction(max : maxDistance)
-        for (std::size_t i = 0; i < clusterA.size(); ++i)
+        for (std::size_t i = 0; i < mA; ++i)
         {
-            for (std::size_t j = 0; j < clusterB.size(); ++j)
+            for (std::size_t j = 0; j < mB; ++j)
             {
-                double distance = calculateDistance(clusterA[i].get(), clusterB[j].get());
+                double distance = calculateDistance(clusterA.vector(i), clusterB.vector(j));
                 if (distance > maxDistance)
                 {
                     maxDistance = distance;
@@ -213,19 +224,23 @@ private:
         return maxDistance;
     }
 
-    double singleLinkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
-                     const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
+    double singleLinkage(Matrix<double>& clusterA,
+                     Matrix<double>& clusterB)
     {
+        int mA {clusterA.getRows()};
+        int mB {clusterB.getRows()};
+        int n {clusterA.getColumns()};
+
         // Initialize minDistance with bbig placeholder value
         double minDistance = std::numeric_limits<double>::max();
 
         // Parallelize the loop using reduciton min so omp does the atomicity
         #pragma omp parallel for reduction(min : minDistance)
-        for (std::size_t i = 0; i < clusterA.size(); ++i)
+        for (std::size_t i = 0; i < mA; ++i)
         {
-            for (std::size_t j = 0; j < clusterB.size(); ++j)
+            for (std::size_t j = 0; j < mB; ++j)
             {
-                double distance = calculateDistance(clusterA[i].get(), clusterB[j].get());
+                double distance = calculateDistance(clusterA.vector(i), clusterB.vector(j));
 
                 if (distance < minDistance)
                 {
@@ -237,8 +252,8 @@ private:
         return minDistance;
     }
 
-    double Linkage(const std::vector<std::reference_wrapper<std::vector<double>>>& clusterA,
-                     const std::vector<std::reference_wrapper<std::vector<double>>>& clusterB)
+    double Linkage(Matrix<double>& clusterA,
+                     Matrix<double>& clusterB)
     {
         // Invokes one of the 3 used linkage methods and returns the distance
         // between the two clusters inputed
@@ -363,7 +378,7 @@ private:
         // Returns the linkage matrix
 
         // Get initial size of the arr
-        const std::size_t n {std::size(m_X)};
+        const int n {m_X.getRows()};
 
         // Initialize the linkage matrix and resize based on return number of clusters
         std::vector<LinkageRow> Z {};
@@ -394,7 +409,7 @@ private:
 
             for (int j = i + 1; j < n; ++j)
             {
-                double distance = calculateDistance(m_X[i], m_X[j]);
+                double distance = calculateDistance(m_X.vector(i), m_X.vector(j));
                 int index = i * n - (i * (i + 1)) / 2 + (j - i - 1);
                 condensedArray[index] = distance;
                 condensedArrayMap[index] = std::make_pair(i, j);
@@ -451,13 +466,15 @@ private:
             condensedArrayMap = updateCondensed.second;
             
             // Initialize vector to store references to the the data points of each cluster
-            std::vector<std::reference_wrapper<std::vector<double>>> cluster1 {};
+            // std::vector<std::reference_wrapper<std::vector<double>>> cluster1 {};
+            // Matrix<double> cluster1 {};
+            Matrix<double> cluster1 {{}, 0, 2};
 
             for (std::size_t k = 0; k < n; ++k)
             {
                 if (id_map[k] == n + i)
                 {
-                    cluster1.push_back(std::ref(m_X[k]));
+                    cluster1.push_row(m_X.vector(k));
                 }
             }
 
@@ -465,13 +482,13 @@ private:
             for (std::size_t k = 0; k < remainingIndices.size()-1; ++k)
             {
                 // Initialize a vector to keep references to data points of cluster 2
-                std::vector<std::reference_wrapper<std::vector<double>>> cluster2 {};
+                Matrix<double> cluster2 {{}, 0, 2};
 
                 for (std::size_t l = 0; l < n; ++l)
                 {
                     if (id_map[l] == remainingIndices[k])
                     {
-                        cluster2.push_back(m_X[l]);
+                        cluster2.push_row(m_X.vector(l));
                     }
                 }
 
@@ -479,7 +496,8 @@ private:
             }
             
             // Clear memory
-            cluster1.clear();
+            // cluster1.clear();
+
 
         }
 
@@ -487,7 +505,7 @@ private:
     }
 
 public:
-    Cluster(std::vector<std::vector<T>>& X, std::string_view linkage_type, std::string_view metric, int n_clusters, bool preemptiveStop)
+    Cluster(Matrix<T>& X, std::string_view linkage_type, std::string_view metric, int n_clusters, bool preemptiveStop)
         : m_X{X}, m_linkageType{linkage_type}, m_metric{metric}, m_n_clusters{n_clusters}, m_preemptiveStop{preemptiveStop}
     {
     }
