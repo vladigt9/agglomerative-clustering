@@ -5,7 +5,7 @@ author: "Vladimir Petrov"
 
 ## Project Overview
 
-This project is a **personal agglomerative clustering** implementation, which forms part of a larger exploration of **Hierarchical Risk Parity**. The purpose of this project is to provide a practical foundation for learning **C++** and **OpenMP** while implementing the clustering algorithm. The algorithm is built to help understand the fundamental concepts of clustering and parallelization. The code doesn't use the most optimized clustering algortihm on purpose, as more loops allow for more implementations of parallelization.
+This project is a **personal agglomerative clustering** implementation, which forms part of a larger exploration of **Hierarchical Risk Parity**. The purpose of this project is to provide a practical experience of **OpenMP** and **BLAS** while implementing the clustering algorithm. The algorithm is built to help understand the fundamental concepts of clustering and parallelization. The code doesn't use the most optimized clustering algorithm on purpose, as more loops allow for more implementations of parallelization.
 
 ## Clustering Algorithm
 
@@ -14,7 +14,7 @@ The implemented algorithm follows the basic principles of **Agglomerative Hierar
 ### Linkage Methods Supported:
 - **Single Linkage**: The distance between two clusters is defined as the shortest distance between any pair of points from each cluster.
 - **Complete Linkage**: The distance between two clusters is defined as the longest distance between any pair of points from each cluster.
-- **Euclidean Linkage**: The distance is calculated using the Euclidean metric, the straight-line distance between points in the feature space.
+- **Average Linkage**: The distance between two clusters is defined as the average distance between all possible pairs of points between the two clusters.
 
 ### Distance Metrics Supported:
 - **Euclidean Distance**: The straight-line distance between two points in space.
@@ -28,13 +28,13 @@ The implemented algorithm follows the basic principles of **Agglomerative Hierar
 The project leverages **C++** for implementing the clustering algorithm and **OpenMP** for parallel processing to speed up computations, especially during the calculation of distances and merging of clusters. While the algorithm is not highly optimized, the goal is to build a solid foundation for more complex hierarchical clustering algorithms.
 
 ## Algorithm
-**Step 1:** The Distances between all the intial points are calculated and kept inside a condensed distance array.
+**Step 1:** The Distances between all the initial points are calculated and kept inside a condensed distance array.
 
 **Step 2:** A map is created for the condensed array in which the indices of the points (clusters) of the corresponding distance are kept.
 
 **For Loop**
 
-- **Step 3:** The minimum distance is found and new cluster is created.
+- **Step 3:** The minimum distance is found and a new cluster is created.
 
 - **Step 4:** All the distances involving the selected points (clusters) are removed from the condensed array and the map, and all remaining ones are shifted to the far left.
 
@@ -43,7 +43,7 @@ The project leverages **C++** for implementing the clustering algorithm and **Op
 - **Step 6:** Repeat until **n-1** clusters have been found.
 
 ## Matrix Class
-In latest update a Matrix class was added, which flattens a matrix from nested vectors (``std::vector<std::vector<T>>``) to a 1D vector (``std::vector<T>``). It also includes basic matrix operations such as addition, substraction and matrix-matrix multiplication. All of them where implemented using the BLAS library.
+In the latest update, a Matrix class was added, which flattens a matrix from nested vectors (``std::vector<std::vector<T>>``) to a 1D vector (``std::vector<T>``). It also includes basic matrix operations such as addition, subtraction and matrix-matrix multiplication. All of them were implemented using the BLAS library.
 
 
 ## Conclusion
