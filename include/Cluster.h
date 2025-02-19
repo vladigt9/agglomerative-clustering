@@ -7,9 +7,13 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <numeric>
+
 #include <omp.h>
 
-#include <Matrix.h>
+#include <Linkage.h>
+#include <Distance.h>
+#include <Matrix.h>  
 
 template <typename T>
 class Cluster
@@ -23,12 +27,16 @@ private:
     // m_preemptiveStop - if True stops clustering once num of unique clusters = m_n_clusters
 
     Matrix<T> m_X {};
+    std::vector<double> m_average_distances {};
     std::string m_linkageType{"single"};
     std::string m_metric{"euclidean"};
     std::vector<int> m_clusters {};
     std::pair<int, int> m_size {1,1};
     int m_n_clusters {1};
     bool m_preemptiveStop {false};
+    std::unique_ptr<Linkage> linkageStrategy;
+    std::unique_ptr<Distance> distanceStrategy;
+    std::unique_ptr<Distance> distanceStrategy2;
 
     // Defines a row for the final linkage matrix
     struct LinkageRow {
@@ -38,264 +46,13 @@ private:
         int size {0};
     };
 
-    double calculateDistance(const std::vector<double>& a, const std::vector<double>& b)
+    double performLinkage(std::vector<double*>& clusterA, std::vector<double*>& clusterB)
     {
-        // Calculates the distance between two points.
-
-        if (m_metric == "euclidean")
-        {
-            // Initialize variable sum of the squared distances SSD
-            double sum = 0.0;
-
-            // Use openMP to parallelize the loop
-            #pragma omp parallel for reduction(+ : sum)
-            for (size_t i = 0; i < m_X.getColumns(); ++i)
-            {
-                sum += (a[i] - b[i]) * (a[i] - b[i]);
-            }
-
-            // Get euclidean distance by taking the square root
-            double distance = std::sqrt(sum);
-
-            return distance;
-        }
-        else if (m_metric == "manhattan")
-        {
-            // Initialize variable for final distance
-            double distance = 0;
-
-            // Use openMP to parallelize the loop
-            #pragma omp parallel for reduction(+ : distance)
-            for (size_t i = 0; i < m_X.getRows(); i++)
-            {
-                distance += std::abs(a[i] - b[i]);
-            }
-
-            return distance;
-        }
-        else if (m_metric == "cosine")
-        {
-            // Initialize varaibles of the dot products and the norms of the vectors
-            double dotProduct = 0;
-            double normA = 0, normB = 0;
-
-            // Use openMP to parallelize the loop
-            #pragma omp parallel for reduction(+ : dotProduct) reduction(+ : normA) reduction(+ : normB)
-            for (size_t i = 0; i < m_X.getRows(); i++)
-            {
-                dotProduct += a[i] * b[i];
-                normA += a[i] * a[i];
-                normB += b[i] * b[i];
-            }
-
-            normA = std::sqrt(normA);
-            normB = std::sqrt(normB);
-
-            // Calculate cosine similarity
-            double cosineSimilarity = dotProduct / (normA * normB);
-
-            // Return cosine distance
-            return 1 - cosineSimilarity;
-        }
-
-        return 0.0;
+        return linkageStrategy->applyLinkage(clusterA, clusterB, m_X.getRows());  // Polymorphism in action
     }
 
-    double averageLinkage(Matrix<double>& clusterA,
-                     Matrix<double>& clusterB)
-    {
-        // Averages the distances of all points between 2 cluster
-        // after which returns the distance
-
-        int mA {clusterA.getRows()};
-        int mB {clusterB.getRows()};
-
-        double distance {0};
-
-        #pragma omp parallel for reduction(+:distance)
-        for (int i = 0; i < mA; ++i)
-        {
-            for (int k = 0; k < mB; ++k)
-            {
-                distance += calculateDistance(clusterA.vector(i), clusterB.vector(k));
-            }
-        }
-
-        if (mA < 2 && mB <2)
-        {
-        }
-        else if (mA < 2)
-        {
-            distance /= mB;
-        }
-        else if (mB < 2)
-        {
-            distance /= mA;
-        }
-        else
-        {
-            distance /= (mA+mB);
-        }
-
-        return distance;
-    }
-
-    double completeLinkage(Matrix<double>& clusterA,
-                     Matrix<double>& clusterB)
-    {
-        int mA {clusterA.getRows()};
-        int mB {clusterB.getRows()};
-        int n {m_size.second};
-
-        // Initialize with a small value
-        double maxDistance = std::numeric_limits<double>::min();
-
-        // Parallelize the for loop and use reduction to find the maxDsitance
-        #pragma omp parallel for reduction(max : maxDistance)
-        for (int i = 0; i < mA; ++i)
-        {
-            for (int j = 0; j < mB; ++j)
-            {
-                double distance = calculateDistance(clusterA.vector(i), clusterB.vector(j));
-                if (distance > maxDistance)
-                {
-                    maxDistance = distance;
-                }
-            }
-        }
-
-        return maxDistance;
-    }
-
-    double singleLinkage(Matrix<double>& clusterA,
-                     Matrix<double>& clusterB)
-    {
-        int mA {clusterA.getRows()};
-        int mB {clusterB.getRows()};
-        int n {clusterA.getColumns()};
-
-        // Initialize minDistance with bbig placeholder value
-        double minDistance = std::numeric_limits<double>::max();
-
-        // Parallelize the loop using reduciton min so omp does the atomicity
-        // #pragma omp parallel for reduction(min : minDistance)
-        for (int i = 0; i < mA; ++i)
-        {
-            for (int j = 0; j < mB; ++j)
-            {
-                double distance = calculateDistance(clusterA.vector(i), clusterB.vector(j));
-
-                if (distance < minDistance)
-                {
-                    minDistance = distance;
-                }
-            }
-        }
-
-        return minDistance;
-    }
-
-    double Linkage(Matrix<double>& clusterA,
-                     Matrix<double>& clusterB)
-    {
-        // Invokes one of the 3 used linkage methods and returns the distance
-        // between the two clusters inputed
-        if (m_linkageType == "single")
-        {
-            return singleLinkage(clusterA, clusterB);
-        }
-        else if (m_linkageType == "complete")
-        {
-            return completeLinkage(clusterA, clusterB);
-        }
-        else if (m_linkageType == "average")
-        {
-            return averageLinkage(clusterA, clusterB);
-        }
-
-        // To be replaced with an error
-        return 0.0;
-    }
-
-    std::pair<std::vector<double>, std::vector<std::pair<int, int>>> 
-    updateCondensedArrayAndMap(const std::vector<double>& condensedArray, 
-                               const std::vector<std::pair<int, int>>& arrayMap, 
-                               const std::vector<int>& remainingIndices, 
-                               int cluster1, 
-                               int cluster2) 
-    {
-        // Updates the condesed array and map by removing all the instances,
-        // of the points/clusters which construct the new one then shifts the 
-        // remaining values to the left
-        
-        // Get the new cluster from the back of remainingIndices
-        const int newCluster = remainingIndices.back();
-        const int sizeIndices = remainingIndices.size();
-
-        // Initialize the new array and map in which all the distances and indices will be stored
-        std::vector<double> newCondensedArray {};
-        std::vector<std::pair<int, int>> newArrayMap {};
-
-        // Reserve space based on size
-        newCondensedArray.reserve((sizeIndices * (sizeIndices - 1)) / 2);
-        newArrayMap.reserve((sizeIndices * (sizeIndices - 1)) / 2);
-
-        // Iterate through arrayMap and keep only the valid indices
-        for (size_t i = 0; i < arrayMap.size(); ++i) 
-        {
-            const std::pair<int, int>& pair = arrayMap[i];
-            
-            // Skip pairs involving merged clusters
-            if (pair.first == cluster1 || pair.first == cluster2 || 
-                pair.second == cluster1 || pair.second == cluster2)
-                continue;
-
-            // Keep the distance and indices that corresponds to this pair
-            newArrayMap.push_back(pair);
-            newCondensedArray.push_back(condensedArray[i]);
-        }
-
-        // Append new distances involving the newly formed cluster
-        for (int i = 0; i < static_cast<int>(remainingIndices.size()) - 1; ++i) 
-        {
-            int a = remainingIndices[i];
-            newArrayMap.emplace_back(a, newCluster);
-            newCondensedArray.push_back(std::numeric_limits<double>::max()); 
-        }
-
-        return {newCondensedArray, newArrayMap};
-    }
-
-
-    std::vector<int> getRemainingIndices(const std::vector<int>& id_map, 
-                                     int cluster1, int cluster2) 
-    {
-        // Returns a vector with the unique remaining indices in ascending order.
-
-        // Initialize the vector and reserve enough space
-        std::vector<int> remainingIndices;
-
-        // Add unique elements from id_map to remainingIndices, excluding cluster1 and cluster2
-        for (int index : id_map) {
-            if (index != cluster1 && index != cluster2) {
-                // Only add unique indices
-                if (std::find(remainingIndices.begin(), remainingIndices.end(), index) == remainingIndices.end()) {
-                    remainingIndices.push_back(index);
-                }
-            }
-        }
-
-        // Sort the remaining indices
-        std::sort(remainingIndices.begin(), remainingIndices.end());
-
-        return remainingIndices;
-    }
-
-    LinkageRow findBestCluster(std::vector<double>& condensedArray, std::vector<std::pair<int, int>>& condensedArrayMap)
-    {
-        // Finds the min distance in an array and its index
-        // Returns a LinkageRow with cluster indices, the distance and dummy variable for num clusters
-
+    LinkageRow getBestCluster(std::vector<double>& condensedArray,
+        std::vector<int> idMap, int n) {
         double minDistance = std::numeric_limits<double>::max();
         std::size_t minIndex = 0;
 
@@ -307,19 +64,162 @@ private:
             }
         }
 
-        return LinkageRow {condensedArrayMap[minIndex].first, condensedArrayMap[minIndex].second, minDistance, 0};
+        std::pair<int, int> clusterIndices {getClusterPairFromIndex(minIndex, n)};
+        
+        int i {idMap[clusterIndices.first]};
+        int j {idMap[clusterIndices.second]};
+
+        if (i > j) {
+            std::swap(i, j);
+        }
+
+        return LinkageRow {i, j, minDistance, 0};
+    }
+
+    void updateClusterMap(std::vector<int>& clusterMap, LinkageRow& cluster, int clusterN)
+    {
+       // Update cluster_map
+        for (std::size_t i = 0; i < clusterMap.size(); ++i)
+        {
+            if (clusterMap[i] == cluster.cluster1 || 
+                clusterMap[i] == cluster.cluster2)
+            {
+                clusterMap[i] = clusterN;
+            }
+        }
+    }
+
+    void updateIdMap(std::vector<int>& idMap, LinkageRow& cluster, int clusterN)
+    {
+        for (std::size_t k = 0; k < idMap.size(); ++k)
+        {
+            if (idMap[k] == cluster.cluster1)
+            {
+                idMap[k] = -1;
+            }
+            else if (idMap[k] == cluster.cluster2)
+            {
+                idMap[k] = clusterN;
+            }
+        }
+    }
+    
+    int getClusterSize(std::vector<int>& clusterMap, int newClusterN)
+    {
+        int size {0};
+        
+        // #pragma omp parallel for reduction(+:size)
+        for (std::size_t i = 0; i < clusterMap.size(); ++i)
+        {
+            if (clusterMap[i] == newClusterN)
+            {
+                ++size;
+            }
+        }
+        return size;
+    }
+
+    std::pair<int, int> getClusterPairFromIndex(int index, int n) {
+        // Find the row `i` in the upper triangular matrix
+        
+        int b = 1 - (2 * n);
+        
+        auto ss = (-b - sqrt(b*b - 8 * index)) / 2;
+
+        int i = static_cast<int>((-b - sqrt(b*b - 8 * index)) / 2);
+    
+        // Now calculate `j` based on the formula
+        int j = index + i * (b + i + 2) / 2 + 1;
+
+        return std::pair<int, int> {i,j};
+    }
+
+    int getIndexFromClusterPair(int i, int j, int n) {
+        // Ensure that i < j, if not, swap them
+        if (i > j) {
+            std::swap(i, j);
+        }
+    
+        // Calculate the index using the formula
+        return i * n - (i * (i + 1)) / 2 + (j - i - 1);
+    }
+
+    std::vector<double*> getCluster1(
+        std::vector<int>& clusterMap, std::vector<int>& idMap,
+        int currentN, int n
+    )
+    {
+    
+        std::vector<double*> c1 {};
+
+        for (std::size_t k = 0; k < clusterMap.size(); ++k)
+        {
+            if (clusterMap[k] == currentN)
+            {
+                c1.push_back(m_X.getRowAddress(k));
+            }
+        }
+
+        return c1;
+    }
+
+    int getIndex(const std::vector<int>& vec, int value) {
+        auto it = std::find(vec.begin(), vec.end(), value);
+        if (it != vec.end()) {
+            return std::distance(vec.begin(), it); // Compute index
+        }
+        return -1; // Return -1 if value is not found
+    }
+
+    void updateDistArray(
+        std::vector<double>& condensedDistArray, std::vector<int>& idMap,
+        std::vector<int>& clusterMap, LinkageRow cluster, int currentN, int n
+    )
+    {   
+        for (std::size_t i = 0; i < condensedDistArray.size(); ++i)
+        {
+            for (std::size_t j = i + 1; j < condensedDistArray.size(); ++j)
+            {
+                if (i == cluster.cluster1 || j == cluster.cluster1)
+                {
+                    int index = getIndexFromClusterPair(i,j,n);
+                    condensedDistArray[index] = std::numeric_limits<double>::max();
+                }
+            }
+        }
+
+        std::vector<double*> cluster1 = getCluster1(clusterMap, idMap, currentN, n);
+
+        int c1Index {getIndex(idMap, currentN)};
+
+        for (std::size_t i = 0; i < idMap.size(); ++i)
+        {
+            if (idMap[i] == -1 || idMap[i] == currentN)
+                continue;
+                
+            std::vector<double*> cluster2 {};
+
+            for (std::size_t j = 0; j<clusterMap.size(); ++j)
+            {
+                if (idMap[i] == clusterMap[j])
+                {
+                    cluster2.push_back(m_X.getRowAddress(j));
+                }
+            }
+
+            if (cluster2.size() == 0)
+                continue;
+            
+            double distance = performLinkage(cluster1, cluster2);
+            
+            int index {getIndexFromClusterPair(i, c1Index, n)};
+            
+            condensedDistArray[index] = distance;
+        }
     }
 
     std::vector<LinkageRow> cluster()
     {
-        // Perform the main clustering
-        // First calculates distances for the intial matrix
-        // Then starts the loop:
-        //      * Get best cluster
-        //      * Update condensed array and map
-        //      * Update Distances
-        // Returns the linkage matrix
-
         // Get initial size of the arr
         const int n {m_X.getRows()};
 
@@ -334,115 +234,47 @@ private:
             Z.resize(n - 1, LinkageRow());
         }
 
+        std::vector<int> idMap (n);
+        std::iota(idMap.begin(), idMap.end(), 0);
+
+        std::vector<int> clusterMap (n);
+        std::iota(clusterMap.begin(), clusterMap.end(), 0);
+
         // Initialize the condensed distance array in memory and its map
-        int condensedSize = n * (n - 1) / 2;
-        std::vector<double> condensedArray(condensedSize);
-        std::vector<std::pair<int, int>> condensedArrayMap (condensedSize);
-        
-        // Initialize map used to deduce intial cluster from index and current cluster from value
-        std::vector<int> id_map (n);
+        int initialCondensedSize = n * (n - 1) / 2;
+        std::vector<double> condensedDistArray(initialCondensedSize);
 
         // Get intial distance condensed array
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < n-1; ++i)
         {
-            id_map[i] = i;
-
-            // Break on n-1 as there the last point has no more distances to calculate
-            if (i == (n-1)) break;
-
             for (int j = i + 1; j < n; ++j)
             {
                 std::vector<double> pointA {m_X.vector(i)};
                 std::vector<double> pointB {m_X.vector(j)};
 
-                double distance = calculateDistance(pointA, pointB);
-                int index = i * n - (i * (i + 1)) / 2 + (j - i - 1);
-                condensedArray[static_cast<std::size_t>(index)] = distance;
-                condensedArrayMap[static_cast<std::size_t>(index)] = std::make_pair(i, j);
+                double distance = distanceStrategy2->calculateDistance(pointA, pointB, n);
+                int index = getIndexFromClusterPair(i, j, n);
+                condensedDistArray[static_cast<std::size_t>(index)] = distance;
             }
         }
 
         for (int i = 0; i < (n-1); ++i)
         {
             // Find best cluster
-            LinkageRow cluster {findBestCluster(condensedArray, condensedArrayMap)};
-
-            // Variable to save the size of the cluster
-            int size {0};
-
-            // Update id_map and get cluster size
-            #pragma omp parallel for reduction(+:size)
-            for (int k = 0; k < n; ++k)
-            {
-                if (id_map[static_cast<std::size_t>(k)] == cluster.cluster1 || 
-                    id_map[static_cast<std::size_t>(k)] == cluster.cluster2)
-                {
-                    id_map[static_cast<std::size_t>(k)] = n+i;
-                    ++size;
-                }
-            }
-
-            // Update Linkage matrix
-            cluster.size = size;
+            int newClusterN {n+i};
+            LinkageRow cluster {getBestCluster(condensedDistArray, idMap, n)};
+            updateClusterMap(clusterMap, cluster, newClusterN);
+            cluster.size = getClusterSize(clusterMap, newClusterN);
             Z[static_cast<std::size_t>(i)] = cluster;
 
-            // update the clusters array with the id_map when specific point is reached
-            if (i == (n-1-m_n_clusters))
-            {
-                m_clusters = id_map;
-            }
-
-            // Break loop when Z has n-1 rows as no more clusters are possible
-            // Or break loop when desired number of cluster is reached and preemptive stop is on
-            if (i == (n-2) || (i == (n-1-m_n_clusters) && m_preemptiveStop))
+            if ((n-2) == i)
                 break;
 
-            // Get remaining indeces of clusters
-            std::vector<int> remainingIndices {getRemainingIndices(id_map, cluster.cluster1, cluster.cluster2)};
-
-            // Get the number of valid distances left after the merging
-            int validClusters = remainingIndices.size() - 2;
-            int numberValidDistances = (validClusters * (validClusters - 1)) / 2 + validClusters;
-
-            // Update the condensed array and map
-            std::pair<std::vector<double>, std::vector<std::pair<int, int>>> updateCondensed 
-                {updateCondensedArrayAndMap(condensedArray, condensedArrayMap, 
-                remainingIndices, cluster.cluster1, cluster.cluster2)};
+            updateIdMap(idMap, cluster, newClusterN);
             
-            condensedArray = updateCondensed.first;
-            condensedArrayMap = updateCondensed.second;
-            
-            // Initialize vector to store references to the the data points of each cluster
-            // std::vector<std::reference_wrapper<std::vector<double>>> cluster1 {};
-            // Matrix<double> cluster1 {};
-            Matrix<double> cluster1 {{}, 0, 2};
-
-            for (int k = 0; k < n; ++k)
-            {
-                if (id_map[static_cast<std::size_t>(k)] == n + i)
-                {
-                    cluster1.push_row(m_X.vector(k));
-                }
-            }
-
-            // Update distances
-            for (std::size_t k = 0; k < remainingIndices.size()-1; ++k)
-            {
-                // Initialize a vector to keep references to data points of cluster 2
-                Matrix<double> cluster2 {{}, 0, 2};
-
-                for (int l = 0; l < n; ++l)
-                {
-                    if (id_map[static_cast<std::size_t>(l)] == remainingIndices[static_cast<std::size_t>(k)])
-                    {
-                        cluster2.push_row(m_X.vector(l));
-                    }
-                }
-
-                condensedArray[numberValidDistances+k] = Linkage(cluster1, cluster2);
-            }
+            updateDistArray(condensedDistArray, idMap, clusterMap, cluster, newClusterN, n);
         }
-
+    
         return Z;
     }
 
@@ -450,6 +282,37 @@ public:
     Cluster(Matrix<T>& X, std::string_view linkage_type, std::string_view metric, int n_clusters, bool preemptiveStop)
         : m_X{X}, m_linkageType{linkage_type}, m_metric{metric},  m_size{X.getRows(), X.getColumns()}, m_n_clusters{n_clusters}, m_preemptiveStop{preemptiveStop}
     {
+
+        if (m_metric == "euclidean") {
+            distanceStrategy = std::make_unique<EuclideanDistance>();
+            distanceStrategy2 = std::make_unique<EuclideanDistance>();
+        } 
+        else if (m_metric == "manhattan") {
+            distanceStrategy = std::make_unique<ManhattanDistance>();
+            distanceStrategy2 = std::make_unique<ManhattanDistance>();
+        } 
+        else {
+            distanceStrategy = std::make_unique<CosineDistance>();
+            distanceStrategy2 = std::make_unique<CosineDistance>();
+        }
+        
+
+        // Move the distanceStrategy into linkageStrategy only once
+        if (m_linkageType == "single") {
+            linkageStrategy = std::make_unique<SingleLinkage>(std::move(distanceStrategy));
+        } 
+        else if (m_linkageType == "complete") {
+            linkageStrategy = std::make_unique<CompleteLinkage>(std::move(distanceStrategy));
+        } 
+        else {
+            linkageStrategy = std::make_unique<AverageLinkage>(std::move(distanceStrategy));
+        }
+
+        // Ensure linkageStrategy is valid after moving
+        if (!linkageStrategy) {
+            throw std::runtime_error("Error: linkageStrategy is nullptr after move!");
+        }
+
     }
 
     void fit()

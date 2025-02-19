@@ -41,7 +41,7 @@ public:
 
     // Constructor to flatten the 2D vector
     Matrix(const std::vector<std::vector<T>>& X, int m, int n)
-        : m_m{m}, m_n{n}, m_size{m*n} 
+        : m_m{m}, m_n{n}, m_size{m*n}
     {
         m_X.reserve(m * n);
         for (const auto& row : X)
@@ -60,7 +60,9 @@ public:
         if (row < 0 || row >= m_m)
             throw std::out_of_range("Row index out of bounds");
 
-        return std::vector<T>(m_X.begin() + row * m_n, m_X.begin() + (row + 1) * m_n);
+        std::vector<T> vec (m_X.begin() + row * m_n, m_X.begin() + (row + 1) * m_n);
+
+        return vec;
     }
 
 
@@ -117,11 +119,20 @@ public:
         if (new_row.size() != m_n)
             throw std::invalid_argument("New row must have the same number of columns as the matrix");
 
-        m_X.insert(m_X.end(), new_row.begin(), new_row.end()); // Append row elements
-        
-        ++m_m;  // Increase row count
+        m_X.insert(m_X.end(), new_row.begin(), new_row.end());
+
+        ++m_m;
+        m_size = m_m * m_n;
     }
 
+    T* getRowAddress(int row)
+{
+    if (row < 0 || row >= m_m)
+        throw std::out_of_range("Row index out of bounds");
+
+    // Return the address of the first element of the specified row
+    return &m_X[row * m_n];
+}
 };
 
 #endif
